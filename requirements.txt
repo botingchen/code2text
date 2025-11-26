@@ -1,3 +1,11 @@
 datasets
 numpy
 matplotlib
+torch
+transformers
+accelerate
+evaluate
+rouge_score
+nltk
+absl-py
+bert_score
