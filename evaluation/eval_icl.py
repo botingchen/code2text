@@ -16,6 +16,7 @@ Make sure you have:
 
 from __future__ import annotations
 
+import argparse     
 import json
 import os
 from typing import List, Dict
@@ -33,7 +34,7 @@ OUTPUT_DIR = "outputs/icl"
 # Update these filenames to match your actual outputs.
 EVAL_FILES = {
     "gpt2_pattern_4shot": "val_gpt2_icl.jsonl",
-    "llama3.2_3b_instruct_4shot": "val_llama3.2_3b_instruct_icl.jsonl",
+    "llama3.2_3b_instruct_4shot": "val_llama3.2_3b_4shot.jsonl",
 }
 
 # -------------------------
@@ -138,11 +139,52 @@ def compute_bertscore(references: List[str], predictions: List[str]) -> float:
 # -------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Evaluate ICL model outputs using BLEU, ROUGE-L, METEOR, and BERTScore."
+    )
+    parser.add_argument(
+        "--input-files",
+        type=str,
+        nargs="+",
+        help="Path(s) to input JSONL file(s) to evaluate. Can specify multiple files.",
+    )
+    parser.add_argument(
+        "--labels",
+        type=str,
+        nargs="+",
+        help="Labels for each input file (optional). Should match the number of input files.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=str,
+        default=os.path.join(OUTPUT_DIR, "icl_eval_results.csv"),
+        help="Path to save the evaluation CSV (default: outputs/icl/icl_eval_results.csv)",
+    )
+    
+    args = parser.parse_args()
+    
+    # Determine which files to evaluate
+    if args.input_files:
+        input_files = args.input_files
+        # Generate labels: use provided labels or derive from filenames
+        if args.labels:
+            if len(args.labels) != len(input_files):
+                print("Warning: Number of labels doesn't match number of input files. Using filenames as labels.")
+                labels = [os.path.splitext(os.path.basename(f))[0] for f in input_files]
+            else:
+                labels = args.labels
+        else:
+            labels = [os.path.splitext(os.path.basename(f))[0] for f in input_files]
+        
+        eval_files = dict(zip(labels, input_files))
+    else:
+        # Fall back to default EVAL_FILES
+        print("No input files specified. Using default EVAL_FILES.")
+        eval_files = {label: os.path.join(OUTPUT_DIR, filename) for label, filename in EVAL_FILES.items()}
+    
     rows = []
 
-    for label, filename in EVAL_FILES.items():
-        jsonl_path = os.path.join(OUTPUT_DIR, filename)
-
+    for label, jsonl_path in eval_files.items():
         print(f"\nLoading predictions for {label} from {jsonl_path}")
         data = load_jsonl(jsonl_path)
 
@@ -167,9 +209,8 @@ def main() -> None:
     print("\n=== ICL Evaluation Results (Validation Set) ===\n")
     print(df.to_string(index=False))
 
-    out_csv = os.path.join(OUTPUT_DIR, "icl_eval_results.csv")
-    df.to_csv(out_csv, index=False)
-    print(f"\nSaved CSV to {out_csv}")
+    df.to_csv(args.output_csv, index=False)
+    print(f"\nSaved CSV to {args.output_csv}")
 
 
 if __name__ == "__main__":
