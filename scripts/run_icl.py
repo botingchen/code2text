@@ -19,6 +19,7 @@ This script:
 
 from __future__ import annotations  
 
+import argparse
 import json
 import os
 from dataclasses import dataclass
@@ -93,12 +94,25 @@ def build_llama_prompt(
         example_blocks.append(block)
 
     target_block = (
-        "\nNow describe the following function.\n\n"
+        "\nNow describe the following function in the same style.\n\n"
         f"Code:\n{code}\n"
         "Description:\n"
     )
 
     return header + "\n".join(example_blocks) + target_block
+
+
+def build_prompt_from_file(
+    prompt_template_path: str,
+    code: str,
+) -> str:
+    """Build prompt from a template file."""
+    with open(prompt_template_path, 'r', encoding='utf-8') as f:
+        template = f.read()
+    
+    # Replace placeholder with actual code
+    prompt = template.replace('<INSERT_TARGET_FUNCTION_HERE>', code)
+    return prompt
 
 
 # -------------------------
@@ -144,16 +158,17 @@ class ICLModelConfig:
 
 def generate_for_model(
     model_cfg: ICLModelConfig,
-    few_shot_examples: List[Dict[str, str]],
     val_ds: Dataset,
+    output_dir: str,
+    few_shot_examples: List[Dict[str, str]] | None = None,
 ) -> None:
     """
     Run ICL generation on the validation split for a single model,
-    and save results to JSONL under OUTPUT_DIR.
+    and save results to JSONL under the specified output directory.
     """
     model_name = model_cfg.name
-    output_path = os.path.join(OUTPUT_DIR, model_cfg.output_filename)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_path = os.path.join(output_dir, model_cfg.output_filename)
+    os.makedirs(output_dir, exist_ok=True)
 
     print(f"\nLoading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -179,7 +194,7 @@ def generate_for_model(
             code = ex["code"]
             reference = ex["docstring"]
 
-            prompt = model_cfg.prompt_builder(few_shot_examples, code)
+            prompt = model_cfg.prompt_builder(few_shot_examples, code) if few_shot_examples is not None else model_cfg.prompt_builder(code)
 
             # Tokenize prompt first, without forcing a max_length yet
             inputs = tokenizer(
@@ -236,6 +251,35 @@ def generate_for_model(
 # -------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run in-context learning evaluation for code-to-text generation."
+    )
+    parser.add_argument(
+        "--prompt-path",
+        type=str,
+        help="Path to the prompt template file (optional). If provided, will use template-based prompting.",
+    )
+    parser.add_argument(
+        "--output-path",
+        type=str,
+        default=OUTPUT_DIR,
+        help=f"Directory path for output JSONL files (default: {OUTPUT_DIR})",
+    )
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=LLAMA_MODEL_NAME,
+        help=f"Model name to use for generation (default: {LLAMA_MODEL_NAME})",
+    )
+    parser.add_argument(
+        "--output-filename",
+        type=str,
+        default="val_icl.jsonl",
+        help="Output filename for the results (default: val_icl.jsonl)",
+    )
+    
+    args = parser.parse_args()
+    
     print(f"Loading processed dataset from: {DATA_DIR}")
     ds = load_from_disk(DATA_DIR)
     train_ds = ds["train"]
@@ -243,27 +287,31 @@ def main() -> None:
 
     print(f"Train size: {len(train_ds)}, Validation size: {len(val_ds)}")
 
-    few_shot_examples = pick_few_shot_examples(train_ds, NUM_FEW_SHOT_EXAMPLES)
-    print(f"Using {len(few_shot_examples)} few-shot examples in prompts.")
+    # Determine prompt builder based on whether a template path is provided
+    if args.prompt_path:
+        print(f"Using prompt template from: {args.prompt_path}")
+        prompt_builder = lambda code: build_prompt_from_file(args.prompt_path, code)
+        few_shot_examples = None
+    else:
+        print("Using default LLaMA instruction-style prompt builder")
+        print(f"Picking {NUM_FEW_SHOT_EXAMPLES} few-shot examples from training data")
+        few_shot_examples = pick_few_shot_examples(train_ds, NUM_FEW_SHOT_EXAMPLES)
+        prompt_builder = build_llama_prompt
 
     model_configs: List[ICLModelConfig] = [
-        # ICLModelConfig(
-        #     name=GPT2_MODEL_NAME,
-        #     prompt_builder=build_gpt2_prompt,
-        #     output_filename="val_gpt2_icl.jsonl",
-        # ),
         ICLModelConfig(
-            name=LLAMA_MODEL_NAME,
-            prompt_builder=build_llama_prompt,
-            output_filename="val_llama3.2_3b_instruct_icl.jsonl",
+            name=args.model_name,
+            prompt_builder=prompt_builder,
+            output_filename=args.output_filename,
         ),
     ]
 
     for cfg in model_configs:
         generate_for_model(
             model_cfg=cfg,
-            few_shot_examples=few_shot_examples,
             val_ds=val_ds,
+            output_dir=args.output_path,
+            few_shot_examples=few_shot_examples,
         )
 
     print("\nDone with ICL generation for all models.")
