@@ -1,0 +1,69 @@
+Code:
+func (s *PublishInput) SetQos(v int64) *PublishInput {
+    s.Qos = &v
+    return s
+}
+Description:
+// SetQos sets the Qos field's value.
+
+Code:
+func parseStruct(r reflect.Value, node *XMLNode, tag reflect.StructTag) error {
+    t := r.Type()
+    if r.Kind() == reflect.Ptr {
+        if r.IsNil() { // create the structure if it's nil
+            s := reflect.New(r.Type().Elem())
+            r.Set(s)
+            r = s
+        }
+
+        r = r.Elem()
+        t = t.Elem()
+    }
+
+    // unwrap any payloads
+    if payload := tag.Get("payload"); payload != "" {
+        field, _ := t.FieldByName(payload)
+        return parseStruct(r.FieldByName(payload), node, field.Tag)
+    }
+
+    for i := 0; i < t.NumField(); i++ {
+        field := t.Field(i)
+        if c := field.Name[0:1]; strings.ToLower(c) == c {
+            continue // ignore unexported fields
+        }
+
+        // figure out what this field is called
+        name := field.Name
+        if field.Tag.Get("flattened") != "" && field.Tag.Get("locationNameList") != "" {
+            name = field.Tag.Get("locationNameList")
+        } else if locName := field.Tag.Get("locationName"); locName != "" {
+            name = locName
+        }
+
+        // try to find the field by name in elements
+        elems := node.Children[name]
+
+        if elems == nil { // try to find the field in attributes
+            if val, ok := node.findElem(name); ok {
+                elems = []*XMLNode{{Text: val}}
+            }
+        }
+
+        member := r.FieldByName(field.Name)
+        for _, elem := range elems {
+            err := parse(member, elem, field.Tag)
+            if err != nil {
+                return err
+            }
+        }
+    }
+    return nil
+}
+Description:
+// parseStruct deserializes a structure and its fields from an XMLNode. Any nested
+// types in the structure will also be deserialized.
+
+Code:
+<INSERT_TARGET_FUNCTION_HERE>
+
+Description:
