@@ -9,3 +9,5 @@ rouge_score
 nltk
 absl-py
 bert_score
+peft
+bitsandbytes
