@@ -12,6 +12,9 @@ Usage example:
         --data-dir data/processed/code_x_glue_go_lenfiltered_sampled \
         --base-model meta-llama/Llama-3.2-3B-Instruct \
         --lora-output-dir outputs/lora/llama
+
+    nohup python3 evaluation/eval_lora.py --data-dir data/processed/code_x_glue_go_lenfiltered_sampled --base-model gpt2 --lora-output-dir outputs/lora/gpt2 > logs/stdout_gpt 2> logs/stderr_gpt &
+    nohup python3 evaluation/eval_lora.py --data-dir data/processed/code_x_glue_go_lenfiltered_sampled --base-model meta-llama/Llama-3.2-3B-Instruct --lora-output-dir outputs/lora/llama > logs/stdout_llama 2> logs/stderr_llama &
 """
 
 from __future__ import annotations
@@ -75,7 +78,7 @@ def compute_all_metrics(refs: List[str], preds: List[str]) -> Dict[str, float]:
     }
 
 # ---------------------------------------------------------------------------
-# Functions for selecting a subset of the data and tokenizing the dataset
+# Functions for tokenizing the dataset
 # ---------------------------------------------------------------------------
 
 def tokenize_supervised_dataset(ds, tokenizer, max_seq_length, model_type):
@@ -228,7 +231,7 @@ def save_jsonl(records, path):
 def save_metrics(results, path):
     os.makedirs(os.path.dirname(path), exist_ok = True)
     with open(path, "w", encoding = "utf-8") as f:
-        json.dump(results, f, indent=2)
+        json.dump(results, f, indent = 2)
 
 # ---------------------------------------------------------------------------
 # Function for parsing command line arguments
