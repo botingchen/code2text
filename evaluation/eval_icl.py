@@ -127,8 +127,7 @@ def compute_bertscore(references: List[str], predictions: List[str]) -> float:
         predictions=predictions,
         references=references,
         model_type="microsoft/deberta-base-mnli",  # or "roberta-large" if you have more VRAM
-        lang="en",
-        rescale_with_baseline=True,
+        lang="en"
     )
     # result["f1"] is a list of per-example scores
     f1_scores = result["f1"]

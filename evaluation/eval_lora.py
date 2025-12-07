@@ -15,6 +15,10 @@ Usage example:
 
     nohup python3 evaluation/eval_lora.py --data-dir data/processed/code_x_glue_go_lenfiltered_sampled --base-model gpt2 --lora-output-dir outputs/lora/gpt2 > logs/stdout_gpt 2> logs/stderr_gpt &
     nohup python3 evaluation/eval_lora.py --data-dir data/processed/code_x_glue_go_lenfiltered_sampled --base-model meta-llama/Llama-3.2-3B-Instruct --lora-output-dir outputs/lora/llama > logs/stdout_llama 2> logs/stderr_llama &
+
+    ## Loading existing LoRA checkpoint
+    nohup python3 evaluation/eval_lora.py --load-lora-dir outputs/lora/gpt2 --data-dir data/processed/code_x_glue_go_lenfiltered_sampled --base-model gpt2 --lora-output-dir outputs/lora/gpt2 > logs/stdout_gpt 2> logs/stderr_gpt &
+    nohup python3 evaluation/eval_lora.py --load-lora-dir outputs/lora/llama --data-dir data/processed/code_x_glue_go_lenfiltered_sampled --base-model meta-llama/Llama-3.2-3B-Instruct --lora-output-dir outputs/lora/llama > logs/stdout_llama 2> logs/stderr_llama &
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from transformers import (
     TrainingArguments
 )
 
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel
 from eval_icl import compute_bleu, compute_rouge_l, compute_meteor, compute_bertscore
 
 import sys
@@ -120,6 +124,8 @@ def can_use_bf16():
     return major >= 8
 
 def train_lora(base_model, tokenizer, train_dataset, args):
+    resolved_output_dir = resolve_non_conflicting_output_dir(args.lora_output_dir)
+
     target_modules = infer_default_target_modules(base_model.config.model_type)
 
     lora_config = LoraConfig(
@@ -138,7 +144,7 @@ def train_lora(base_model, tokenizer, train_dataset, args):
     data_collator = DataCollatorForLanguageModeling(tokenizer = tokenizer, mlm = False)
 
     training_args = TrainingArguments(
-        output_dir = args.lora_output_dir,
+        output_dir = resolved_output_dir,
         per_device_train_batch_size = args.per_device_train_batch_size,
         gradient_accumulation_steps = args.gradient_accumulation_steps,
         learning_rate = args.learning_rate,
@@ -163,11 +169,51 @@ def train_lora(base_model, tokenizer, train_dataset, args):
     )
     trainer.train()
 
-    os.makedirs(args.lora_output_dir, exist_ok = True)
-    peft_model.save_pretrained(args.lora_output_dir)
-    tokenizer.save_pretrained(args.lora_output_dir)
+    os.makedirs(resolved_output_dir, exist_ok = True)
+    peft_model.save_pretrained(resolved_output_dir)
+    tokenizer.save_pretrained(resolved_output_dir)
 
-    return peft_model
+    save_training_parameters(args, lora_config, target_modules, training_args, resolved_output_dir)
+
+    return peft_model, resolved_output_dir
+
+# ---------------------------------------------------------------------------
+# Functions for loading trained LoRA model
+# ---------------------------------------------------------------------------
+
+def resolve_non_conflicting_output_dir(output_dir):
+    if not os.path.exists(output_dir):
+        return output_dir
+    res_dir = output_dir
+    idx = 1
+    while os.path.exists(res_dir):
+        res_dir = output_dir + "_" + str(idx)
+        idx += 1
+    return res_dir
+
+def lora_checkpoint_exists(output_dir):
+    config_path = os.path.join(output_dir, "adapter_config.json")
+    weight_paths = [
+        os.path.join(output_dir, "adapter_model.bin"),
+        os.path.join(output_dir, "adapter_model.safetensors"),
+    ]
+    return os.path.isfile(config_path) and any(os.path.isfile(p) for p in weight_paths)
+
+def load_or_train_lora(train_ds, tokenizer, args):
+    base_model = load_base_model(args.base_model)
+    if args.load_lora_dir:
+        if lora_checkpoint_exists(args.load_lora_dir):
+            print(f"Found existing LoRA checkpoint in {args.load_lora_dir}; loading it.")
+            return PeftModel.from_pretrained(base_model, args.load_lora_dir), args.load_lora_dir
+        else:
+            raise ValueError(f"LoRA checkpoint not found in {args.load_lora_dir}")
+
+    print("\nTokenizing train subset for LoRA fine-tuning...")
+    tokenized_train = tokenize_supervised_dataset(
+        train_ds, tokenizer, args.max_seq_length, args.base_model
+    )
+    print("Training LoRA adapter...")
+    return train_lora(base_model, tokenizer, tokenized_train, args)
 
 # ---------------------------------------------------------------------------
 # Functions for evaluating the model
@@ -213,7 +259,7 @@ def evaluate_model(model, tokenizer, dataset, max_seq_length, max_new_tokens, te
                 "id": int(example["id"]) if "id" in example else idx,
                 "code": example["code"],
                 "reference": reference,
-                "generated": prediction,
+                "generated": prediction
             }
         )
 
@@ -232,6 +278,40 @@ def save_metrics(results, path):
     os.makedirs(os.path.dirname(path), exist_ok = True)
     with open(path, "w", encoding = "utf-8") as f:
         json.dump(results, f, indent = 2)
+
+def save_training_parameters(args, lora_config, target_modules, training_args, output_dir):
+    os.makedirs(output_dir, exist_ok = True)
+    payload = {
+        "base_model": args.base_model,
+        "data_dir": args.data_dir,
+        "eval_split": args.eval_split,
+        "max_seq_length": args.max_seq_length,
+        "generation": {
+            "max_new_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+        },
+        "training": {
+            "per_device_train_batch_size": args.per_device_train_batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "num_train_epochs": args.num_train_epochs,
+            "learning_rate": args.learning_rate,
+            "logging_steps": args.logging_steps,
+            "optimizer": training_args.optim,
+            "fp16": training_args.fp16,
+            "bf16": training_args.bf16,
+        },
+        "lora": {
+            "r": lora_config.r,
+            "alpha": lora_config.lora_alpha,
+            "dropout": lora_config.lora_dropout,
+            "target_modules": list(target_modules),
+        },
+    }
+    params_path = os.path.join(output_dir, "training_parameters.json")
+    with open(params_path, "w", encoding = "utf-8") as f:
+        json.dump(payload, f, indent = 2)
+
 
 # ---------------------------------------------------------------------------
 # Function for parsing command line arguments
@@ -258,30 +338,28 @@ def parse_args():
     parser.add_argument("--lora-dropout", type = float, default = 0.05)
 
     parser.add_argument(
+        "--load-lora-dir",
+        type = str,
+        default = None
+    )
+    parser.add_argument(
         "--lora-output-dir",
         type = str,
         default = DEFAULT_OUTPUT_DIR
-    )
-    parser.add_argument(
-        "--predictions-dir",
-        type = str,
-        default = os.path.join(DEFAULT_OUTPUT_DIR, "predictions")
     )
     return parser.parse_args()
 
 def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    os.makedirs(args.lora_output_dir, exist_ok = True)
-
-    results_path = os.path.join(args.lora_output_dir, "metrics", args.base_model.replace("/", "_") + ".json")
 
     print(f"Loading dataset from {args.data_dir}")
     dataset = load_from_disk(args.data_dir)
     train_ds = dataset["train"]
     eval_ds = dataset[args.eval_split]
 
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+    tokenizer_source = args.load_lora_dir if args.load_lora_dir else args.base_model
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
     ensure_pad_token(tokenizer)
 
     # ------------------------------------------------------------------
@@ -300,24 +378,15 @@ def main():
         device = device,
         model_type = args.base_model
     )
-    save_jsonl(
-        baseline_records,
-        os.path.join(args.predictions_dir, "baseline_predictions.jsonl"),
-    )
     del baseline_model
     torch.cuda.empty_cache()
 
     results = [{"Model": "baseline", **baseline_metrics}]
 
     # ------------------------------------------------------------------
-    # LoRA Training and Evaluation
+    # LoRA Training / Loading and Evaluation
     # ------------------------------------------------------------------
-    print("\nTokenizing train subset for LoRA fine-tuning...")
-    tokenized_train = tokenize_supervised_dataset(train_ds, tokenizer, args.max_seq_length, args.base_model)
-    
-    print("Training LoRA adapter...")
-    base_for_lora = load_base_model(args.base_model)
-    lora_model = train_lora(base_for_lora, tokenizer, tokenized_train, args)
+    lora_model, resolved_output_dir = load_or_train_lora(train_ds, tokenizer, args)
 
     lora_model.to(device)
     print("\nEvaluating LoRA-adapted model...")
@@ -332,11 +401,19 @@ def main():
         device = device,
         model_type = args.base_model
     )
+
+    # Save predictions for baseline and LoRA models
+    save_jsonl(
+        baseline_records,
+        os.path.join(resolved_output_dir, args.base_model.replace("/", "_") + "_baseline_predictions.jsonl"),
+    )
     save_jsonl(
         lora_records,
-        os.path.join(args.predictions_dir, args.base_model.replace("/", "_") + "_lora_predictions.jsonl"),
+        os.path.join(resolved_output_dir, args.base_model.replace("/", "_") + "_lora_predictions.jsonl"),
     )
     results.append({"Model": "lora", **lora_metrics})
+
+    results_path = os.path.join(resolved_output_dir, "metrics.json")
 
     save_metrics(results, results_path)
 
