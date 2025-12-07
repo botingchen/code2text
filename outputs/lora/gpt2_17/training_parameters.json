@@ -1,0 +1,29 @@
+{
+  "base_model": "gpt2",
+  "data_dir": "data/processed/code_x_glue_go_lenfiltered_sampled",
+  "eval_split": "validation",
+  "max_seq_length": 1024,
+  "generation": {
+    "max_new_tokens": 64,
+    "temperature": 0.0,
+    "top_p": 0.95
+  },
+  "training": {
+    "per_device_train_batch_size": 2,
+    "gradient_accumulation_steps": 8,
+    "num_train_epochs": 1.0,
+    "learning_rate": 0.0002,
+    "logging_steps": 25,
+    "optimizer": "paged_adamw_8bit",
+    "fp16": false,
+    "bf16": true
+  },
+  "lora": {
+    "r": 16,
+    "alpha": 64,
+    "dropout": 0.05,
+    "target_modules": [
+      "c_attn"
+    ]
+  }
+}
