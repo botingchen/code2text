@@ -1,109 +1,21 @@
-You are an expert Go developer. When given a Go function, you should:
-1. First, identify what the function does at a high level
-2. Then, write a concise English description focusing on purpose and behavior
-3. Format your response as a Go-style comment (starting with //) using the same 
-style with the examples
+You are an expert Go developer writing concise, high-level function comments.
+Use brief reasoning to ensure accuracy, then output only the final comment.
 
-Here are some examples:
+Instructions:
+1) Think step-by-step to identify the function’s purpose and behavior.
+2) Focus on intent and effects, avoid low-level implementation details.
+3) Write a single Go-style comment starting with `//`, 1–2 sentences.
+4) Start the comment with the function name when available.
 
-[Example 1]
-Code:
-func (s *PublishInput) SetQos(v int64) *PublishInput {
-    s.Qos = &v
-    return s
-}
+Reasoning (concise, do not include in final output):
+- What does the function aim to accomplish?
+- What inputs it uses and side effects it has (mutations, I/O, errors)?
+- Any noteworthy behavior (validation, retries, recursion) at a high level.
 
-Reasoning: This is a setter method that assigns a value to the Qos field and returns the struct for method chaining.
+Output format:
+// <FunctionName> <concise purpose/behavior>.
 
-Description:
-// SetQos sets the Qos field's value.
-
-[Example 2]
-Code:
-func parseStruct(r reflect.Value, node *XMLNode, tag reflect.StructTag) error {
-    t := r.Type()
-    if r.Kind() == reflect.Ptr {
-        if r.IsNil() { // create the structure if it's nil
-            s := reflect.New(r.Type().Elem())
-            r.Set(s)
-            r = s
-        }
-
-        r = r.Elem()
-        t = t.Elem()
-    }
-
-    // unwrap any payloads
-    if payload := tag.Get("payload"); payload != "" {
-        field, _ := t.FieldByName(payload)
-        return parseStruct(r.FieldByName(payload), node, field.Tag)
-    }
-
-    for i := 0; i < t.NumField(); i++ {
-        field := t.Field(i)
-        if c := field.Name[0:1]; strings.ToLower(c) == c {
-            continue // ignore unexported fields
-        }
-
-        // figure out what this field is called
-        name := field.Name
-        if field.Tag.Get("flattened") != "" && field.Tag.Get("locationNameList") != "" {
-            name = field.Tag.Get("locationNameList")
-        } else if locName := field.Tag.Get("locationName"); locName != "" {
-            name = locName
-        }
-
-        // try to find the field by name in elements
-        elems := node.Children[name]
-
-        if elems == nil { // try to find the field in attributes
-            if val, ok := node.findElem(name); ok {
-                elems = []*XMLNode{{Text: val}}
-            }
-        }
-
-        member := r.FieldByName(field.Name)
-        for _, elem := range elems {
-            err := parse(member, elem, field.Tag)
-            if err != nil {
-                return err
-            }
-        }
-    }
-    return nil
-}
-
-Reasoning: This function uses reflection to deserialize XML data into a Go struct. It handles pointers, payloads, and recursively processes nested structures by matching XML elements to struct fields.
-
-Description:
-// parseStruct deserializes a structure and its fields from an XMLNode. Any nested
-// types in the structure will also be deserialized.
-
-[Example 3]
-Code:
-func (s *ImageBuilder) SetImageBuilderErrors(v []*ResourceError) *ImageBuilder {
-    s.ImageBuilderErrors = v
-    return s
-}
-
-Reasoning: This is a setter method that assigns a slice of resource errors to the ImageBuilderErrors field and returns the struct.
-
-Description:
-// SetImageBuilderErrors sets the ImageBuilderErrors field's value.
-
-[Example 4]
-Code:
-func (s *ListIpRoutesOutput) SetIpRoutesInfo(v []*IpRouteInfo) *ListIpRoutesOutput {
-    s.IpRoutesInfo = v
-    return s
-}
-
-Reasoning: This is a setter method for the IpRoutesInfo field, following the builder pattern.
-
-Description:
-// SetIpRoutesInfo sets the IpRoutesInfo field's value.
-
-Now describe the following function in the same style.
+Now describe the following function:
 
 Code:
 <INSERT_TARGET_FUNCTION_HERE>
